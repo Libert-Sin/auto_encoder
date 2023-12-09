@@ -31,7 +31,7 @@ done
 # 현재 폴더 내의 모든 .heic 파일에 대해 반복
 for input_file in "$input_directory"*.{heic,jpg,png}; do
     # 출력 파일 이름 설정 (확장자 변경)
-    output_file="$output_directory/$(basename "$input_file" .heic).jpg"
+    output_file="$output_directory/$(basename "$input_file" .$ext).jpg"
 
     # imagemagick를 사용하여 HEIC 파일을 JPG로 변환
     convert "$input_file" "$output_file"
