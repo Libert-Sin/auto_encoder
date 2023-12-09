@@ -24,5 +24,19 @@ for input_file in "$input_directory"*.{mp4,mov,avi,mkv}; do
     HandBrakeCLI -i "$input_file" -o "$output_file" -e x264 -a 1 -E copy
 done
 
+
+
+
+
+# 현재 폴더 내의 모든 .heic 파일에 대해 반복
+for input_file in "$input_directory"*.{heic,jpg,png}; do
+    # 출력 파일 이름 설정 (확장자 변경)
+    output_file="$output_directory/$(basename "$input_file" .heic).jpg"
+
+    # imagemagick를 사용하여 HEIC 파일을 JPG로 변환
+    convert "$input_file" "$output_file"
+done
+
 # 원래의 glob 설정으로 되돌리기
 shopt -u nocaseglob
+
