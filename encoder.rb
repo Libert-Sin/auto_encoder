@@ -1,42 +1,92 @@
-#!/bin/bash
+require 'fileutils'
+require 'tempfile'
 
-# 대소문자 구분 없이 glob 매칭 활성화
-shopt -s nocaseglob
+# FFMPEG 명령을 실행하고 로그를 파싱하는 함수
+def encode_video(ffmpeg_cmd, total_frames, log_file)
+  start_time = Time.now
+  pid = spawn("#{ffmpeg_cmd} 2> #{log_file.path}")
+  log_file.rewind  # 로그 파일 포인터를 처음으로 되돌림
+  while Process.waitpid(pid, Process::WNOHANG).nil?
+    sleep 1
+    log_file.each do |line|
+      if line =~ /frame=\s*(\d+)/
+        current_frame = $1.to_i
+        percent_complete = (current_frame / total_frames.to_f * 100).round(2)
+        progress_str = sprintf("%.2f%%", percent_complete)
+        elapsed_time = Time.now - start_time
+        remaining_time = current_frame > 0 ? elapsed_time / current_frame * (total_frames - current_frame) : 0
+        complete_time = Time.now + remaining_time
 
-# 현재 폴더를 입력 파일이 있는 디렉토리로 설정
-input_directory="./"
-
-# 현재 폴더의 하위 폴더 'export'를 출력 파일을 저장할 디렉토리로 설정
-output_directory="./export/"
-
-# 출력 디렉토리가 없으면 생성
-mkdir -p "$output_directory"
-
-# 현재 폴더 내의 모든 비디오 파일에 대해 반복
-for input_file in "$input_directory"*.{mp4,mov,avi,mkv}; do
-    # 파일 확장자 확인
-    ext="${input_file##*.}"
-
-    # 출력 파일 이름 설정 (확장자 변경)
-    output_file="$output_directory/$(basename "$input_file" .$ext).mp4"
-
-    # HandBrakeCLI 명령 실행
-    HandBrakeCLI -i "$input_file" -o "$output_file" -e x264 -a 1 -E copy
-done
-
+        elapsed_time_str = Time.at(elapsed_time).utc.strftime("%H:%M:%S")
+        remaining_time_str = Time.at(remaining_time).utc.strftime("%H:%M:%S")
+        complete_time_str = complete_time.strftime("%H:%M:%S")
+        printf("진행률: %-10s 경과시간: %-10s 남은시간: %-10s 완료예상시간: %-10s\n",
+                  progress_str, elapsed_time_str, remaining_time_str, complete_time_str)
 
 
 
+      end
+    end
+  end
+end
 
-# 현재 폴더 내의 모든 .heic 파일에 대해 반복
-for input_file in "$input_directory"*.{heic,jpg,png}; do
-    # 출력 파일 이름 설정 (확장자 변경)
-    output_file="$output_directory/$(basename "$input_file" .$ext).jpg"
+# 이미지 파일 변환 함수
+def convert_image(input_file, output_file)
+  system("convert '#{input_file}' -quality 100 '#{output_file}'")
+end
 
-    # imagemagick를 사용하여 HEIC 파일을 JPG로 변환
-    convert "$input_file" "$output_file"
-done
+# 인자에 따라 FFMPEG 명령 및 출력 파일 형식을 설정하는 함수
+def ffmpeg_command_and_output_file(input_file, output_directory, option)
+  ext = File.extname(input_file)
+  case option
+  when '-dnxhd'
+    output_file = "#{output_directory}/#{File.basename(input_file, ext)}.mov"
+    command = "ffmpeg -hwaccel auto -i '#{input_file}' -vf 'format=yuv422p10le' -c:v dnxhd -profile:v dnxhr_hqx -c:a pcm_s24le -f mov '#{output_file}'"
+  when '-h264'
+    output_file = "#{output_directory}/#{File.basename(input_file, ext)}.mp4"
+    command = "ffmpeg -hwaccel auto -i '#{input_file}' -c:v libx264 -crf 16 -preset veryslow '#{output_file}'"
+  when '-h265'
+    output_file = "#{output_directory}/#{File.basename(input_file, ext)}.mp4"
+    command = "ffmpeg -hwaccel auto -i '#{input_file}' -c:v libx265 -preset veryslow -crf 16 -pix_fmt yuv420p10le '#{output_file}'"
+  else
+    return [nil, nil]
+  end
+  [command, output_file]
+end
 
-# 원래의 glob 설정으로 되돌리기
-shopt -u nocaseglob
+# 메인 로직
+input_directory = "./"
+output_directory = "./export/"
+FileUtils.mkdir_p(output_directory)
+option = ARGV[0] # 첫 번째 커맨드 라인 인자
 
+input_file_directory = File.dirname(input_directory)
+log_file = Tempfile.new('ffmpeg_log', input_file_directory)
+
+if option.nil?
+  puts "option : -dnxhd / -h264 / -h265"
+else
+  Dir.glob("#{input_directory}*.{mp4,mov,avi,mkv,mxf,rsv}", File::FNM_CASEFOLD).each do |input_file|
+    ffprobe_duration_cmd = "ffprobe -v error -select_streams v:0 -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '#{input_file}'"
+    duration = `#{ffprobe_duration_cmd}`.to_f
+
+    ffprobe_frame_rate_cmd = "ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 '#{input_file}'"
+    frame_rate = eval(`#{ffprobe_frame_rate_cmd}`).to_f # 프레임 레이트를 계산
+    total_frames = (duration * frame_rate).to_i
+
+    ffmpeg_cmd, output_file = ffmpeg_command_and_output_file(input_file, output_directory, option)
+    next if ffmpeg_cmd.nil?
+    encode_video(ffmpeg_cmd, total_frames, log_file)
+  end
+end
+
+# 이미지 파일 처리
+Dir.glob("#{input_directory}*.{heic,jpg,png}", File::FNM_CASEFOLD).each do |input_file|
+  ext = File.extname(input_file)
+  output_file = "#{output_directory}/#{File.basename(input_file, ext)}.jpg"
+  convert_image(input_file, output_file)
+end
+
+# 로그 파일 삭제
+log_file.close
+log_file.unlink
