@@ -28,11 +28,6 @@ def encode_video(ffmpeg_cmd, total_duration, log_file)
       end
     end
   end
-
-  # 프로세스가 완료된 후 로그 파일의 끝까지 확인
-  log_file.each do |line|
-  puts line  # 완료 보고 또는 다른 중요한 로그 출력
-  end
 end
 
 
