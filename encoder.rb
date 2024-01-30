@@ -1,20 +1,23 @@
 require 'fileutils'
 require 'tempfile'
+require 'date'
 
 # FFMPEG 명령을 실행하고 로그를 파싱하는 함수
-def encode_video(ffmpeg_cmd, total_frames, log_file)
+def encode_video(ffmpeg_cmd, total_duration, log_file)
   start_time = Time.now
   pid = spawn("#{ffmpeg_cmd} 2> #{log_file.path}")
   log_file.rewind  # 로그 파일 포인터를 처음으로 되돌림
   while Process.waitpid(pid, Process::WNOHANG).nil?
     sleep 1
     log_file.each do |line|
-      if line =~ /frame=\s*(\d+)/
-        current_frame = $1.to_i
-        percent_complete = (current_frame / total_frames.to_f * 100).round(2)
+      if line =~ /time=\s*(\d+:\d+:\d+\.\d+)/
+        current_time = DateTime.parse($1).to_time
+        start_time_of_video = DateTime.parse("00:00:00.00").to_time
+        elapsed_video_time = (current_time - start_time_of_video).to_f
+        percent_complete = (elapsed_video_time / total_duration * 100).round(2)
         progress_str = sprintf("%.2f%%", percent_complete)
         elapsed_time = Time.now - start_time
-        remaining_time = current_frame > 0 ? elapsed_time / current_frame * (total_frames - current_frame) : 0
+        remaining_time = elapsed_video_time > 0 ? elapsed_time / elapsed_video_time * (total_duration - elapsed_video_time) : 0
         complete_time = Time.now + remaining_time
 
         elapsed_time_str = Time.at(elapsed_time).utc.strftime("%H:%M:%S")
@@ -22,13 +25,18 @@ def encode_video(ffmpeg_cmd, total_frames, log_file)
         complete_time_str = complete_time.strftime("%H:%M:%S")
         printf("진행률: %-10s 경과시간: %-10s 남은시간: %-10s 완료예상시간: %-10s\n",
                   progress_str, elapsed_time_str, remaining_time_str, complete_time_str)
-
-
-
       end
     end
   end
+
+  # 프로세스가 완료된 후 로그 파일의 끝까지 확인
+  log_file.each do |line|
+  puts line  # 완료 보고 또는 다른 중요한 로그 출력
+  end
 end
+
+
+
 
 # 이미지 파일 변환 함수
 def convert_image(input_file, output_file)
@@ -68,17 +76,14 @@ if option.nil?
 else
   Dir.glob("#{input_directory}*.{mp4,mov,avi,mkv,mxf,rsv}", File::FNM_CASEFOLD).each do |input_file|
     ffprobe_duration_cmd = "ffprobe -v error -select_streams v:0 -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 '#{input_file}'"
-    duration = `#{ffprobe_duration_cmd}`.to_f
-
-    ffprobe_frame_rate_cmd = "ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate -of default=noprint_wrappers=1:nokey=1 '#{input_file}'"
-    frame_rate = eval(`#{ffprobe_frame_rate_cmd}`).to_f # 프레임 레이트를 계산
-    total_frames = (duration * frame_rate).to_i
+    total_duration = `#{ffprobe_duration_cmd}`.to_f # 영상의 총 길이를 초 단위로 구함
 
     ffmpeg_cmd, output_file = ffmpeg_command_and_output_file(input_file, output_directory, option)
     next if ffmpeg_cmd.nil?
-    encode_video(ffmpeg_cmd, total_frames, log_file)
+    encode_video(ffmpeg_cmd, total_duration, log_file) # total_duration을 전달
   end
 end
+
 
 # 이미지 파일 처리
 Dir.glob("#{input_directory}*.{heic,jpg,png}", File::FNM_CASEFOLD).each do |input_file|
